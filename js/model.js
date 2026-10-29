@@ -2,7 +2,7 @@
 // relationships, the rules that constrain them and the actions that change
 // them. Users are people or dogs. This module has no rendering code.
 
-import * as G from './geometry.js?v=3';
+import * as G from './geometry.js?v=4';
 
 export const ACTIVITIES = ['walking', 'standing', 'sitting', 'playing'];
 export const GRASS_MIN = 2;

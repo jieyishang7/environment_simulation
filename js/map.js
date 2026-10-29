@@ -6,7 +6,7 @@
 
 const FT_PER_M = 3.28084;
 
-export const MAP_URL = 'data/central-park.geojson?v=3';
+export const MAP_URL = 'data/central-park.geojson?v=4';
 
 export function makeProjection(frame) {
   const [lon0, lat0] = frame.origin;

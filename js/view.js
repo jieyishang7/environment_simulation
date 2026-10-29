@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import * as G from './geometry.js?v=3';
-import { GRASS_MIN, GRASS_MAX } from './model.js?v=3';
+import * as G from './geometry.js?v=4';
+import { GRASS_MIN, GRASS_MAX } from './model.js?v=4';
 
 export const ACTIVITY_COLORS = {
   walking: '#2f74e0',
@@ -133,6 +133,61 @@ function buildingGeometry(buildings) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.computeVertexNormals();
+  return g;
+}
+
+// The two distance metrics (and the paths-only reference) keep these colors in
+// the 3D view and in every chart: categorical slots 1-3 of the chart palette.
+export const METRIC_COLORS = {
+  straight: '#2a78d6',
+  foot: '#eb6834',
+  paths: '#1baf7a',
+};
+
+// A dashed flat line from a to b.
+function dashedGeometry(a, b, y, w, dash, gap) {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const lines = [];
+  for (let s = 0; s < len; s += dash + gap) {
+    const e = Math.min(len, s + dash);
+    const at = (t) => ({ x: a.x + ((b.x - a.x) * t) / len, y: a.y + ((b.y - a.y) * t) / len });
+    lines.push({ points: [at(s), at(e)] });
+  }
+  return ribbonGeometry(lines, y, () => w).geometry;
+}
+
+// Color for v on a ramp of hex stops spread evenly over [lo, hi].
+export function rampColor(ramp, lo, hi, v) {
+  const f = Math.max(0, Math.min(1, (v - lo) / (hi - lo))) * (ramp.length - 1);
+  const i = Math.min(ramp.length - 2, Math.floor(f));
+  return new THREE.Color(ramp[i]).lerp(new THREE.Color(ramp[i + 1]), f - i);
+}
+
+// The path network colored per node: field = {nodes, edges, widths, values,
+// ramp, domain}. A node with a non-finite value hides its edges.
+function fieldGeometry(field, y, s) {
+  const pos = [];
+  const col = [];
+  const { nodes, edges, values, ramp, domain } = field;
+  const colors = Array.from(values, (v) => (Number.isFinite(v) ? rampColor(ramp, domain[0], domain[1], v) : null));
+  for (let k = 0; k < edges.length; k++) {
+    const [i, j] = edges[k];
+    const ci = colors[i], cj = colors[j];
+    if (!ci || !cj) continue;
+    const a = nodes[i], b = nodes[j];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-6) continue;
+    const hw = Math.max(field.widths[k] * 0.5, 1.1 * s);
+    const nx = (-(b.y - a.y) / len) * hw, ny = ((b.x - a.x) / len) * hw;
+    const quad = [[a, ci, 1], [b, cj, 1], [b, cj, -1], [a, ci, 1], [b, cj, -1], [a, ci, -1]];
+    for (const [p, c, side] of quad) {
+      pos.push(p.x + nx * side, y, -(p.y + ny * side));
+      col.push(c.r, c.g, c.b);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   return g;
 }
 
@@ -266,6 +321,7 @@ export class ParkView {
     scene.add(this.ball);
     this.fetchAnim = null;
 
+    this.buildDistanceLayer();
     this.raycaster = new THREE.Raycaster();
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -771,6 +827,107 @@ export class ParkView {
     return null;
   }
 
+  // Model point on the ground under the cursor.
+  groundPoint(clientX, clientY) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit)) return null;
+    return { x: hit.x, y: -hit.z };
+  }
+
+  // ---- distances -------------------------------------------------------
+
+  buildDistanceLayer() {
+    this.distGroup = new THREE.Group();
+    this.scene.add(this.distGroup);
+    this.distShown = null;
+    this.distScale = 1;
+    const flat = (color, opacity = 0.95) => new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+    });
+    this.distMats = {
+      straight: flat(METRIC_COLORS.straight),
+      foot: flat(METRIC_COLORS.foot),
+      paths: flat(METRIC_COLORS.paths, 0.85),
+      gate: flat('#0b0b0b', 0.75),
+      origin: flat('#0b0b0b', 0.9),
+      field: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false, depthTest: false, side: THREE.DoubleSide }),
+    };
+  }
+
+  // d: { analysis, show: {line, foot, paths, labels}, gates, field } from main.js,
+  // or null to clear.
+  showDistance(d) {
+    this.distShown = d;
+    this.renderDistance();
+  }
+
+  renderDistance() {
+    const group = this.distGroup;
+    for (const c of [...group.children]) {
+      group.remove(c);
+      c.geometry?.dispose();
+    }
+    const d = this.distShown;
+    if (!d) return;
+    const s = this.distScale;
+    const add = (geometry, mat, order) => {
+      const m = new THREE.Mesh(geometry, mat);
+      m.renderOrder = order;
+      group.add(m);
+      return m;
+    };
+    const ribbon = (points, y, w) => ribbonGeometry([{ points }], y, () => w).geometry;
+
+    if (d.field) add(fieldGeometry(d.field, 0.6, s), this.distMats.field, 20);
+
+    // Every gate, as a dark dot where a path leaves the park.
+    const dot = new THREE.CircleGeometry(2.6 * s, 20).rotateX(-Math.PI / 2);
+    const dots = d.gates.map((g) => dot.clone().translate(g.point.x, 0.8, -g.point.y));
+    if (dots.length) add(mergeGeometries(dots), this.distMats.gate, 21);
+    dot.dispose();
+
+    for (const leg of d.legs) {
+      if (leg.paths?.length > 1) add(ribbon(leg.paths, 0.9, 2.4 * s), this.distMats.paths, 22);
+      if (leg.line) add(dashedGeometry(leg.line[0], leg.line[1], 1.0, 2.2 * s, 12 * s, 8 * s), this.distMats.straight, 23);
+      if (leg.foot?.length > 1) add(ribbon(leg.foot, 1.1, 3.4 * s), this.distMats.foot, 24);
+    }
+    const ring = new THREE.RingGeometry(3.5 * s, 5.2 * s, 28).rotateX(-Math.PI / 2);
+    add(ring.translate(d.origin.x, 1.2, -d.origin.y), this.distMats.origin, 25);
+
+    for (const l of d.labels) {
+      const { div, obj } = label(`dist-label ${l.cls || ''}`);
+      div.innerHTML = l.html;
+      if (l.color) div.style.setProperty('--c', l.color);
+      obj.position.copy(v3(l.point, 3));
+      group.add(obj);
+    }
+  }
+
+  // Moves the camera so all `points` (model coordinates) are in view, keeping
+  // the current viewing direction.
+  fitTo(points) {
+    if (!points.length) return;
+    const b = G.bbox(points);
+    const c = new THREE.Vector3((b.minX + b.maxX) / 2, 0, -(b.minY + b.maxY) / 2);
+    const size = Math.max(b.maxX - b.minX, b.maxY - b.minY, 120);
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    // Keep it fairly top-down so the route isn't hidden behind trees.
+    dir.y = Math.max(dir.y, 0.75);
+    dir.normalize();
+    const dist = (size / 2) / Math.tan((this.camera.fov * Math.PI) / 360) * 1.55;
+    // The side panel covers the right of the screen: shift the target right.
+    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+    const shift = this.container.clientWidth > 760 ? size * 0.22 : 0;
+    this.controls.target.copy(c).addScaledVector(right, -shift);
+    this.camera.position.copy(this.controls.target).addScaledVector(dir, dist);
+  }
+
   // Model point the camera is looking at.
   focusPoint() {
     const t = this.controls.target;
@@ -832,6 +989,12 @@ export class ParkView {
     this.sun.target.position.copy(target);
     const far = this.camera.position.distanceTo(target);
     this.container.classList.toggle('zoomed-out', far > 1200);
+    // Distance routes stay a readable width on screen as you zoom.
+    const scale = Math.max(1, Math.min(30, far / 300));
+    if (Math.abs(scale / this.distScale - 1) > 0.3) {
+      this.distScale = scale;
+      if (this.distShown) this.renderDistance();
+    }
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
   }

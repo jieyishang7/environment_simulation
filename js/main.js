@@ -1,19 +1,26 @@
 // Wires the park model, the three.js view and the toolbar together.
 
-import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=3';
-import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=3';
-import { loadMap } from './map.js?v=3';
+import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=4';
+import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=4';
+import { loadMap } from './map.js?v=4';
+import { DistanceModel } from './distance.js?v=4';
+import { DistanceUI } from './distance-ui.js?v=4';
 
 const map = await loadMap();
 const park = new Park(map);
 const view = new ParkView(document.getElementById('viewport'), park);
 const $ = (id) => document.getElementById(id);
+const distance = new DistanceUI({
+  park, view, model: new DistanceModel(park), root: document.getElementById('distance'),
+  getSelection: () => selection, onChange: () => refresh(),
+});
 
 let selection = null;
 let autoTimer = null;
 
 function select(sel) {
   selection = sel;
+  distance.selectionChanged();
   view.selection = sel;
   refresh();
 }
@@ -70,8 +77,10 @@ const actions = {
   reset() {
     if (autoTimer) actions.auto();
     park.reset();
+    distance.escape();
     select(null);
   },
+  measure() { distance.startMeasure(); },
 };
 
 for (const btn of document.querySelectorAll('[data-action]')) {
@@ -83,11 +92,14 @@ window.addEventListener('keydown', (e) => {
   const map = {
     a: 'add', Delete: 'remove', Backspace: 'remove', c: 'activity', b: 'bench',
     d: 'dog', l: 'leash', f: 'fetch', t: 'advance', ' ': 'advance', p: 'auto',
-    x: 'clear', m: 'mow', o: 'toggle', Escape: null,
+    x: 'clear', m: 'mow', o: 'toggle', g: 'measure', Escape: null,
   };
   if (!(e.key in map)) return;
   e.preventDefault();
-  if (map[e.key] === null) return select(null);
+  if (map[e.key] === null) {
+    if (distance.escape()) return refresh();
+    return select(null);
+  }
   const btn = document.querySelector(`[data-action="${map[e.key]}"]`);
   if (!btn.disabled) actions[map[e.key]]();
 });
@@ -98,7 +110,9 @@ let down = null;
 canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
 canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
-  select(view.pick(e.clientX, e.clientY));
+  const picked = view.pick(e.clientX, e.clientY);
+  if (distance.pick(picked, view.groundPoint(e.clientX, e.clientY))) return;
+  select(picked);
 });
 
 // Keep the side panel below the toolbar however many rows it wraps to.
@@ -114,6 +128,7 @@ function refresh() {
   renderInspector();
   renderRules();
   renderLog();
+  distance.update();
   const dogs = park.users.filter((u) => u.type === 'dog').length;
   $('day').textContent = `Day ${park.day}`;
   $('census').textContent = `${park.users.length - dogs} people · ${dogs} dogs`;
@@ -260,7 +275,7 @@ function renderLegend() {
 }
 
 // Handy for poking at the model from the browser console.
-window.parkApp = { park, view, actions, select };
+window.parkApp = { park, view, actions, select, distance };
 
 renderLegend();
 if (window.innerWidth < 760) document.querySelector('#side details[open]')?.removeAttribute('open');

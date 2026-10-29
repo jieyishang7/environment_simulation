@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Central Park</title>
-  <link rel="stylesheet" href="css/style.css?v=3">
+  <link rel="stylesheet" href="css/style.css?v=4">
   <script type="importmap">
     {
       "imports": {
@@ -36,6 +36,7 @@
     <div class="group">
       <button data-action="advance" title="Move walkers and grow grass (T)"><span class="icon">⏭</span><span class="label">Advance</span></button>
       <button data-action="auto" title="Advance time continuously (P)"><span class="icon">▶</span><span class="label">Play</span></button>
+      <button data-action="measure" title="Measure the distance between two places or people (G)"><span class="icon">📏</span><span class="label">Measure</span></button>
     </div>
     <div class="group">
       <button data-action="clear"><span class="icon">📣</span><span class="label">Clear lawn</span></button>
@@ -49,6 +50,11 @@
 
   <aside id="side">
     <section id="inspector" class="panel"></section>
+
+    <details class="panel" id="distance-panel" open>
+      <summary>Distance <span class="sum-sub">straight line vs on foot</span></summary>
+      <div id="distance"></div>
+    </details>
 
     <details class="panel" open>
       <summary>Rules <span id="rules-summary"></span></summary>
@@ -64,8 +70,9 @@
       <div class="legend-row"><span>Grass</span><span class="grass-scale"><small>2″</small><span id="legend-grass"></span><small>20″</small></span></div>
       <div class="legend-row"><span>Needs mowing</span><span><span class="badge mow">✂ <span id="mow-threshold"></span></span> + pulsing dashed edge</span></div>
       <div class="legend-row"><span>Closed lawn</span><span>fence + red hatching</span></div>
+      <div class="legend-row"><span>Distance</span><span>blue dashes: straight line · orange: walking route (paths + open lawns) · green: paths only · black dots: park gates</span></div>
       <div class="legend-row"><span>Map</span><span>Real Central Park lawns, paths and water, with the Manhattan streets and buildings around it. Up is Manhattan north, 29° east of true north.</span></div>
-      <div class="legend-row"><span>Keys</span><span class="keys">A add · Del remove · C activity · B bench · D dog · L leash · F fetch · T step · P play · X clear · M mow · O open/close</span></div>
+      <div class="legend-row"><span>Keys</span><span class="keys">A add · Del remove · C activity · B bench · D dog · L leash · F fetch · T step · P play · X clear · M mow · O open/close · G measure</span></div>
     </details>
   </aside>
 
@@ -75,6 +82,6 @@
 
   <!-- Bump ?v= here and on every local import when shipping changes, so
        browsers fetch the new files instead of stale cached ones. -->
-  <script type="module" src="js/main.js?v=3"></script>
+  <script type="module" src="js/main.js?v=4"></script>
 </body>
 </html>
