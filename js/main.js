@@ -1,10 +1,11 @@
 // Wires the park model, the three.js view and the toolbar together.
 
-import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=6';
-import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=6';
-import { loadMap } from './map.js?v=6';
-import { DistanceModel } from './distance.js?v=6';
-import { DistanceUI } from './distance-ui.js?v=6';
+import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=10';
+import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=10';
+import { loadMap } from './map.js?v=10';
+import { DistanceModel } from './distance.js?v=10';
+import { DistanceUI } from './distance-ui.js?v=10';
+import { MowerUI } from './mower-ui.js?v=10';
 
 const map = await loadMap();
 const park = new Park(map);
@@ -15,6 +16,10 @@ const distance = new DistanceUI({
   getSelection: () => selection, onChange: () => refresh(),
 });
 
+const mowerUI = new MowerUI({
+  park, view, root: view.mowerCard,
+  onChange: (sel) => (sel ? select(sel) : refresh()),
+});
 let selection = null;
 let autoTimer = null;
 
@@ -62,7 +67,11 @@ const actions = {
     run({ ok: true });
   },
   clear() { run(park.clearLawn(selection?.id)); },
-  mow() { run(park.mowLawn(selection?.id)); },
+  mow() {
+    const r = park.mowLawn(selection?.id, view.focusPoint());
+    run(r);
+    if (r.ok && park.mowerActive('great-lawn') && selection?.id === 'great-lawn') mowerUI.zoomToMower();
+  },
   toggle() { run(park.toggleLawn(selection?.id)); },
   auto() {
     if (autoTimer) {
@@ -128,6 +137,7 @@ function refresh() {
   renderInspector();
   renderRules();
   renderLog();
+  mowerUI.render();
   distance.update();
   const dogs = park.users.filter((u) => u.type === 'dog').length;
   $('day').textContent = `Day ${park.day}`;
@@ -156,7 +166,13 @@ function updateToolbar() {
   const here = lawn ? park.usersOnLawn(lawn.id).length : 0;
   set('clear', !!lawn && here > 0, lawn ? (here ? `Send ${here} users on ${lawn.name} to the path` : `${lawn.name} is empty`) : 'Select a lawn to clear');
   const mowCheck = lawn && park.canMow(lawn);
-  set('mow', !!lawn, lawn ? (mowCheck.ok ? `Mow ${lawn.name} to ${MOW_HEIGHT}″` : `Blocked: ${mowCheck.reason}`) : 'Select a lawn to mow');
+  const mowing = lawn && park.mowerActive(lawn.id);
+  const great = lawn?.id === 'great-lawn';
+  set('mow', !!lawn, lawn
+    ? (mowing ? `Stop the mower on ${lawn.name}` : great ? 'Start the mower on the Great Lawn (stops within 1.5 m of anyone)'
+      : mowCheck.ok ? `Mow ${lawn.name} to ${MOW_HEIGHT}″` : `Blocked: ${mowCheck.reason}`)
+    : 'Select a lawn to mow');
+  document.querySelector('[data-action="mow"] .label').textContent = mowing ? 'Stop mower' : 'Mow';
   set('toggle', !!lawn, lawn ? `${lawn.status === 'open' ? 'Close' : 'Open'} ${lawn.name}` : 'Select a lawn to open or close');
 
   document.querySelector('[data-action="dog"] .label').textContent = person ? 'Give dog' : 'Add dog';
@@ -228,7 +244,9 @@ function renderInspector() {
       ${row('', `<small>${here.length - dogs} people, ${dogs} dogs</small>`)}
       ${row('Bordered by', pathList(l.borderedBy))}
       ${row('Boundary', `${l.boundary.length}-sided polygon`)}
-      <p class="hint">${mow.ok ? 'Can be mowed now.' : `Can't mow: ${mow.reason}. Use Clear lawn to send everyone to the path.`}</p>`;
+      <p class="hint">${park.mowerActive(l.id) ? `The mower is working here, ${Math.round(park.mower.progress * 100)}% done. It stops whenever anyone is within 1.5 m.`
+        : l.id === 'great-lawn' ? `Press Mow to start the ride-on mower${here.length ? `. It will stop whenever one of the ${here.length} users here is within 1.5 m` : ''}.`
+          : mow.ok ? 'Can be mowed now.' : `Can't mow: ${mow.reason}. Use Clear lawn to send everyone to the path.`}</p>`;
     return;
   }
   if (selection.type === 'bench') {
@@ -275,7 +293,23 @@ function renderLegend() {
 }
 
 // Handy for poking at the model from the browser console.
-window.parkApp = { park, view, actions, select, distance };
+window.parkApp = { park, view, actions, select, distance, mowerUI };
+
+// The mower runs in real time, independent of Advance / Play.
+let lastTick = performance.now();
+let mowerPanelAt = 0;
+function mowerLoop(now) {
+  const dt = Math.min(0.1, Math.max(0, (now - lastTick) / 1000));
+  lastTick = now;
+  if (park.tickMower(dt)) refresh();
+  else if (park.mower && now > mowerPanelAt) {
+    mowerPanelAt = now + 250;
+    mowerUI.render();
+  }
+  mowerUI.tick(now);
+  requestAnimationFrame(mowerLoop);
+}
+requestAnimationFrame(mowerLoop);
 
 renderLegend();
 if (window.innerWidth < 760) document.querySelector('#side details[open]')?.removeAttribute('open');

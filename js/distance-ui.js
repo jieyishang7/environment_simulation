@@ -3,9 +3,9 @@
 // (straight line vs route), as bars, as a comparison of all four modes, and as
 // a scatter of every entrance and lawn (straight line on x, route on y).
 
-import * as G from './geometry.js?v=6';
-import { DETOUR_FLAG, MODES } from './distance.js?v=6';
-import { METRIC_COLORS } from './view.js?v=6';
+import * as G from './geometry.js?v=10';
+import { DETOUR_FLAG, MODES } from './distance.js?v=10';
+import { METRIC_COLORS } from './view.js?v=10';
 
 const C = METRIC_COLORS;
 const TIME_RAMP = ['#fde3d4', '#f6b08f', '#eb6834', '#b8441a', '#7a2a0c'];

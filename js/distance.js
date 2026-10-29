@@ -24,7 +24,7 @@
 // outline (walk, run), the subset of those where a rideable drive or bike lane
 // crosses it (bike), and the mouths of the transverse roads (drive).
 
-import * as G from './geometry.js?v=6';
+import * as G from './geometry.js?v=10';
 
 const STEP = 40;              // ft between nodes along a path
 const LAWN_EDGE_REACH = 16;   // a path node this close to a lawn can step onto it

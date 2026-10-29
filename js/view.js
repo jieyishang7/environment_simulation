@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import * as G from './geometry.js?v=6';
-import { GRASS_MIN, GRASS_MAX } from './model.js?v=6';
+import * as G from './geometry.js?v=10';
+import { GRASS_MIN, GRASS_MAX } from './model.js?v=10';
+import { SAFE_FT, FT_PER_M, MOWER_LENGTH, MOWER_WIDTH, CUT_WIDTH, MOWER_LAWN } from './mower.js?v=10';
 
 export const ACTIVITY_COLORS = {
   walking: '#2f74e0',
@@ -322,6 +323,7 @@ export class ParkView {
     this.fetchAnim = null;
 
     this.buildDistanceLayer();
+    this.buildMower();
     this.raycaster = new THREE.Raycaster();
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -827,6 +829,144 @@ export class ParkView {
     return null;
   }
 
+  // ---- mower -----------------------------------------------------------
+
+  buildMower() {
+    const g = new THREE.Group();
+    const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(MOWER_LENGTH * 0.62, 1.4, MOWER_WIDTH * 0.8), mat('#2f7d32'));
+    body.position.set(-MOWER_LENGTH * 0.12, 1.5, 0);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(MOWER_LENGTH * 0.42, 0.45, MOWER_WIDTH), mat('#f2c230'));
+    deck.position.set(MOWER_LENGTH * 0.18, 0.55, 0);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.2, 1.6), mat('#222'));
+    seat.position.set(-MOWER_LENGTH * 0.25, 2.6, 0);
+    const wheel = new THREE.CylinderGeometry(0.75, 0.75, 0.5, 14).rotateX(Math.PI / 2);
+    const wheelMat = mat('#1d1d1d');
+    for (const [x, z] of [[-1.9, 1.75], [-1.9, -1.75], [1.8, 1.6], [1.8, -1.6]]) {
+      const w = new THREE.Mesh(wheel, wheelMat);
+      w.position.set(x, 0.75, z);
+      g.add(w);
+    }
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), new THREE.MeshBasicMaterial({ color: '#ffb000' }));
+    beacon.position.set(-MOWER_LENGTH * 0.12, 3.5, 0);
+    g.add(body, deck, seat, beacon);
+    g.traverse((m) => { if (m.isMesh) m.castShadow = true; });
+
+    // The 1.5 m safety zone around the mower's body: a rounded rectangle.
+    const hx = MOWER_LENGTH / 2, hz = MOWER_WIDTH / 2, r = SAFE_FT;
+    const shape = new THREE.Shape();
+    shape.moveTo(-hx, -hz - r);
+    shape.lineTo(hx, -hz - r);
+    shape.absarc(hx, -hz, r, -Math.PI / 2, 0, false);
+    shape.lineTo(hx + r, hz);
+    shape.absarc(hx, hz, r, 0, Math.PI / 2, false);
+    shape.lineTo(-hx, hz + r);
+    shape.absarc(-hx, hz, r, Math.PI / 2, Math.PI, false);
+    shape.lineTo(-hx - r, -hz);
+    shape.absarc(-hx, -hz, r, Math.PI, Math.PI * 1.5, false);
+    const zoneMat = new THREE.MeshBasicMaterial({ color: '#2b8a3e', transparent: true, opacity: 0.2, depthWrite: false });
+    const zone = new THREE.Mesh(new THREE.ShapeGeometry(shape, 24).rotateX(-Math.PI / 2), zoneMat);
+    zone.position.y = 0.45;
+    zone.renderOrder = 6;
+    const edgeMat = new THREE.LineBasicMaterial({ color: '#2b8a3e' });
+    const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(shape.getPoints(24).map((p) => new THREE.Vector3(p.x, 0.5, -p.y))), edgeMat);
+    g.add(zone, edge);
+    g.visible = false;
+    this.scene.add(g);
+
+    const { div, obj } = label('mower-label');
+    obj.position.set(0, 5.5, 0);
+    g.add(obj);
+
+    // A red line from the mower to whoever is too close.
+    const warnLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineDashedMaterial({ color: '#d03b3b', dashSize: 0.6, gapSize: 0.4, depthTest: false }));
+    warnLine.renderOrder = 30;
+    warnLine.visible = false;
+    this.scene.add(warnLine);
+
+    const stripeMat = new THREE.MeshBasicMaterial({ color: '#e4f7b9', transparent: true, opacity: 0.55, depthWrite: false });
+    const stripes = new THREE.Mesh(new THREE.BufferGeometry(), stripeMat);
+    stripes.renderOrder = 5;
+    this.scene.add(stripes);
+    this.mowerView = { group: g, zone, zoneMat, edgeMat, beacon, div, warnLine, stripes, shownCut: -1, stripeAt: 0, mower: null };
+
+    // The mower's info card stands just south of the Great Lawn, where the
+    // visitors are and where the mower starts.
+    const lawn = this.park.lawn(MOWER_LAWN);
+    const south = lawn.boundary.reduce((m, p) => (p.y < m.y ? p : m));
+    const card = label('mower-card');
+    card.obj.position.copy(v3({ x: south.x, y: south.y - 30 }, 4));
+    card.obj.center.set(0.5, 0);
+    this.scene.add(card.obj);
+    this.mowerCard = card.div;
+  }
+
+  syncMower(t, now) {
+    const mv = this.mowerView;
+    const m = this.park.mower;
+    if (mv.mower !== m) {
+      mv.mower = m;
+      mv.shownCut = -1;
+    }
+    mv.group.visible = !!m;
+    if (!m) {
+      mv.warnLine.visible = false;
+      mv.stripes.visible = false;
+      return;
+    }
+    const alarm = m.status === 'alarm';
+    mv.group.position.copy(v3(m.position, LAWN_TOP));
+    mv.group.rotation.y = Math.atan2(m.heading.y, m.heading.x);
+    const pulse = 0.5 + 0.5 * Math.sin(t * 10);
+    mv.zoneMat.color.set(alarm ? '#d03b3b' : '#2b8a3e');
+    mv.zoneMat.opacity = alarm ? 0.25 + 0.3 * pulse : 0.18;
+    mv.edgeMat.color.set(alarm ? '#d03b3b' : '#2b8a3e');
+    mv.beacon.material.color.set(alarm ? (pulse > 0.5 ? '#ff2020' : '#550000') : m.status === 'mowing' ? '#ffb000' : '#777');
+    const n = m.nearest;
+    const pct = Math.round(m.progress * 100);
+    const metres = n ? (n.dist / FT_PER_M).toFixed(2) : null;
+    mv.div.className = `mower-label ${alarm ? 'alarm' : m.status}`;
+    mv.div.innerHTML = alarm
+      ? `⚠ STOP · ${n.name} ${metres} m`
+      : m.status === 'steering' ? 'Steering around…'
+        : m.status === 'done' ? `Done · ${pct}% mowed` : m.status === 'stopped' ? `Stopped · ${pct}%` : `Mowing · ${pct}%`;
+    // Warning line when someone is inside twice the zone.
+    if (n && n.dist < SAFE_FT * 2 && m.status !== 'done' && m.status !== 'stopped') {
+      const pos = mv.warnLine.geometry.attributes.position;
+      pos.setXYZ(0, m.position.x, 2, -m.position.y);
+      pos.setXYZ(1, n.point.x, 2, -n.point.y);
+      pos.needsUpdate = true;
+      mv.warnLine.computeLineDistances();
+      mv.warnLine.material.color.set(n.dist < SAFE_FT ? '#d03b3b' : '#e8590c');
+      mv.warnLine.visible = true;
+    } else {
+      mv.warnLine.visible = false;
+    }
+    // Mowed stripes, rebuilt a few times a second while they grow.
+    const cut = m.mowed.reduce((a, [s0, s1]) => a + s1 - s0, 0) + (m.s - m.runStart);
+    if (Math.abs(cut - mv.shownCut) > 1 && now > mv.stripeAt) {
+      mv.shownCut = cut;
+      mv.stripeAt = now + 250;
+      const runs = [...m.mowed];
+      if (m.status === 'mowing' && m.s > m.runStart) runs.push([m.runStart, m.s]);
+      const lines = [];
+      const { points, cum, cut: isCut } = m.route;
+      for (const [s0, s1] of runs) {
+        for (let i = 0; i < isCut.length; i++) {
+          if (!isCut[i]) continue;
+          const a = Math.max(s0, cum[i]), b = Math.min(s1, cum[i + 1]);
+          if (b - a < 0.2) continue;
+          const at = (d) => G.pointOnPolyline(points, cum, d).point;
+          lines.push({ points: [at(a), at(b)] });
+        }
+      }
+      mv.stripes.geometry.dispose();
+      mv.stripes.geometry = lines.length ? ribbonGeometry(lines, LAWN_TOP + 0.06, () => CUT_WIDTH).geometry : new THREE.BufferGeometry();
+    }
+    mv.stripes.visible = true;
+  }
+
   // Model point on the ground under the cursor.
   groundPoint(clientX, clientY) {
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -1003,6 +1143,7 @@ export class ParkView {
       uv.ring.rotation.y = t;
     }
     this.updateBall(now);
+    this.syncMower(t, now);
     for (const lv of this.lawnViews.values()) {
       if (lv.mowLine.visible) lv.mowLine.material.opacity = 0.55 + 0.45 * Math.sin(t * 4);
     }

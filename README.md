@@ -23,6 +23,8 @@ The park is the real Central Park. `data/central-park.geojson` is a vendored ext
 | `js/map.js` | Loads the GeoJSON extract and projects it to feet. |
 | `js/model.js` | The semantic model: entities, relationships, rules, actions. Has no rendering code. |
 | `js/distance.js` | The two distance metrics for four travel modes: the path, lawn and street network, entrances per mode, Dijkstra. Has no rendering code. |
+| `js/mower.js` | The Great Lawn mower: stripe route, the 1.5 m proximity rule, stopping, steering around people. Has no rendering code. |
+| `js/mower-ui.js` | The mower's info card on the map, and the alarm sound. |
 | `js/distance-ui.js` | The Distance panel: mode picker, bars, every-mode comparison, scatter, near/far list, map overlay, Measure tool. |
 | `js/geometry.js` | Polygon helpers: area, containment, overlap, shared edges. |
 | `js/view.js` | three.js scene: lawns, paths, users, fences, labels, animation. |
@@ -45,9 +47,43 @@ The **Rules** panel checks every rule after each action. Actions enforce the rul
 - A walking user who changes activity steps onto the nearest bordering lawn that allows it, and stands. A sitting user who changes activity moves to the nearest path and walks.
 - Sit on bench moves a person to the nearest bench with a free seat. Their dogs lie on the path at their feet.
 - Add dog gives the selected person a leashed dog, or brings a new visitor with a dog. Unleash works only when the owner is on a lawn. Fetch has the owner throw a ball for an unleashed dog.
-- Mowing (to 5″) is refused while anyone is on the lawn. Clear lawn sends everyone on it (people and their dogs) to the nearest path, so it can then be mowed.
+- **Great Lawn mower (proximity rule).** Mowing the Great Lawn starts a ride-on mower that drives back and forth in 5 ft stripes. **IF** a person or dog is less than **1.5 m (4.9 ft)** from the mower, **THEN** the mower stops and sounds the alarm, **ELSE** it keeps mowing. If someone stays in the zone, the mower waits 2 s, then steers around them on a detour that keeps everyone outside the zone, and leaves that patch unmowed. Other lawns are mowed at once (to 5″), but only when empty; Clear lawn sends everyone on a lawn to the nearest path.
 - Closing a lawn moves its users to the nearest path, where they walk.
 - Advancing time moves walkers along the path network (turning at junctions) and grows grass, up to 20″.
+
+## Proximity: the Great Lawn mower
+
+Proximity is nearness in space, time or relationship. This simulation tests one kind of "too close": a person or dog near a moving mower.
+
+**Rule.** **IF** a person or dog is less than **1.5 m (4.9 ft)** from the mower, **THEN** the mower stops and sounds the alarm, **ELSE** it keeps mowing.
+
+**Metric.** Straight-line (Euclidean) distance from the mower's body (a 6 × 4.5 ft rectangle) to the occupant's position. Straight line, not route distance, is the right metric here: the blade is the danger, so a path or a fence line between them doesn't make anyone safer.
+
+**How it behaves.**
+
+- The mower drives back and forth over the Great Lawn in 5 ft stripes at about 2.7 mph, shown at ×1, ×5 or ×20 speed. It starts on the stripe nearest the visitors.
+- It checks distance every half foot it moves.
+- When it stops, it waits until the zone is clear here and a little way ahead, then resumes.
+- If someone stays in the zone, it waits 2 s, then plans a detour that keeps everyone outside the zone, trying both sides of the person. That patch is left unmowed.
+- The rule holds while it steers too: anyone else who comes close, or the person it is passing getting closer, stops it again.
+
+**What you see.** All of it is on the map at the Great Lawn:
+
+- The mower carries a 1.5 m safety zone. It is green normally, and flashes red with a beacon when someone is inside it.
+- A dashed line runs to whoever is within twice the zone.
+- Mowed stripes show as lighter grass.
+- An info card at the south end of the lawn shows:
+  - the mower's status and how much has been mowed;
+  - the nearest occupant's distance on a bar against the 1.5 m threshold;
+  - a 30-second trace of that distance;
+  - the alarm count, speed and sound controls;
+  - the rule in IF-THEN-ELSE form.
+
+Alarms also go to the event log, and the Rules panel checks that the moving mower never has anyone inside the zone.
+
+**Try it.** Press **Start mowing** on the card, or select the Great Lawn and press **Mow** (`M`). The mower stops within seconds for the visitors sitting by Turtle Pond. To walk someone into it, select a walker on a path next to the lawn and press **Activity**: they step onto the lawn.
+
+![The mower stopped: a visitor is 1.37 m away](docs/mower-alarm.png)
 
 ## Distance
 

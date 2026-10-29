@@ -2,7 +2,8 @@
 // relationships, the rules that constrain them and the actions that change
 // them. Users are people or dogs. This module has no rendering code.
 
-import * as G from './geometry.js?v=6';
+import * as G from './geometry.js?v=10';
+import { Mower, SAFE_FT, SAFE_M, FT_PER_M, MOWER_LAWN } from './mower.js?v=10';
 
 export const ACTIVITIES = ['walking', 'standing', 'sitting', 'playing'];
 export const GRASS_MIN = 2;
@@ -118,6 +119,7 @@ export class Park {
     this.dogNameIndex = 0;
     this.users = [];
     this.log = [];
+    this.mower = null;
 
     this.lawns = this.map.lawns.map((l) => {
       const [h, status, growth] = LAWN_START[l.id] || [8, 'open', 1];
@@ -482,10 +484,19 @@ export class Park {
     return { ok: true };
   }
 
+  // The Great Lawn has a ride-on mower whose proximity rule keeps people
+  // safe (see mower.js), so it can be mowed with people on it. Other lawns
+  // are mowed at once, and only when empty.
   canMow(lawn) {
+    if (lawn.id === MOWER_LAWN) return { ok: true };
     const n = this.usersOnLawn(lawn.id).length;
     if (n > 0) return { ok: false, reason: `${lawn.name} has ${n} ${n === 1 ? 'user' : 'users'} on it` };
     return { ok: true };
+  }
+
+  mowerActive(lawnId) {
+    const m = this.mower;
+    return !!m && m.lawnId === lawnId && ['mowing', 'alarm', 'steering'].includes(m.status);
   }
 
   // ---- actions -----------------------------------------------------------
@@ -654,15 +665,47 @@ export class Park {
     return { ok: true, count: here.length };
   }
 
-  mowLawn(id) {
+  // On the Great Lawn, starts the mower from the stripe nearest `near`, or
+  // stops it if it is running. Any other lawn is mowed at once.
+  mowLawn(id, near = this.focus) {
     const lawn = this.lawn(id);
     if (!lawn) return { ok: false, reason: 'Select a lawn first' };
+    if (this.mowerActive(id)) {
+      this.mower.stop();
+      this.note(`Mower stopped on ${lawn.name}, ${Math.round(this.mower.progress * 100)}% mowed.`);
+      return { ok: true };
+    }
     const check = this.canMow(lawn);
     if (!check.ok) return this.refuse(`Can't mow: ${check.reason}. Clear the lawn first.`);
-    const before = lawn.grassHeight;
-    lawn.grassHeight = MOW_HEIGHT;
-    this.note(`${lawn.name} mowed from ${before.toFixed(1)}″ to ${MOW_HEIGHT}″.`);
+    if (lawn.id !== MOWER_LAWN) {
+      const before = lawn.grassHeight;
+      lawn.grassHeight = MOW_HEIGHT;
+      this.note(`${lawn.name} mowed from ${before.toFixed(1)}″ to ${MOW_HEIGHT}″.`);
+      return { ok: true };
+    }
+    const speed = this.mower?.timeScale;
+    this.mower = new Mower(this, lawn, near);
+    if (speed) this.mower.timeScale = speed;
+    const here = this.usersOnLawn(lawn.id).length;
+    this.note(`Mower started on ${lawn.name}${here ? ` with ${here} ${here === 1 ? 'user' : 'users'} on it` : ''}. It stops if anyone comes within ${SAFE_M} m.`);
     return { ok: true };
+  }
+
+  // Runs the mower for dt seconds of real time and logs what it did.
+  tickMower(dt) {
+    const m = this.mower;
+    if (!m) return null;
+    const ev = m.tick(dt);
+    const lawn = m.lawn;
+    const m2 = (ft) => `${(ft / FT_PER_M).toFixed(2)} m (${ft.toFixed(1)} ft)`;
+    if (ev === 'alarm') this.note(`⚠ Mower alarm on ${lawn.name}: ${m.nearest.name} is ${m2(m.nearest.dist)} away, under ${SAFE_M} m. The mower stopped.`, 'warn');
+    if (ev === 'resume') this.note(`Mower resumed on ${lawn.name}: no one within ${SAFE_M} m.`);
+    if (ev === 'steer') this.note(`Mower steered around ${m.steer?.around || 'someone'}; that patch of ${lawn.name} is left unmowed.`);
+    if (ev === 'done') {
+      const pct = Math.round(m.progress * 100);
+      this.note(`${lawn.name} mowed to ${MOW_HEIGHT}″${pct < 99 ? ` (${pct}%: patches near people were skipped to keep ${SAFE_M} m away)` : ''}. ${m.alarms} alarm${m.alarms === 1 ? '' : 's'}.`);
+    }
+    return ev;
   }
 
   toggleLawn(id) {
@@ -844,6 +887,11 @@ export class Park {
     add('Lawns, paths and benches do not overlap', this.staticChecks.overlaps);
     add('Every lawn and bench borders a path', this.staticChecks.unbordered);
     add(`Path width ≥ ${MIN_PATH_WIDTH} ft`, this.staticChecks.narrow);
+
+    const mw = this.mower;
+    add(`Mower stops when anyone is within ${SAFE_M} m (${SAFE_FT.toFixed(1)} ft)`,
+      mw && mw.status === 'mowing' && mw.nearest && mw.nearest.dist < SAFE_FT
+        ? [`${mw.nearest.name} is ${(mw.nearest.dist / FT_PER_M).toFixed(2)} m from the moving mower`] : []);
 
     add(`Grass height between ${GRASS_MIN}″ and ${GRASS_MAX}″`, this.lawns
       .filter((l) => l.grassHeight < GRASS_MIN || l.grassHeight > GRASS_MAX)
