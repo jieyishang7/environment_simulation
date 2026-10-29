@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import * as G from './geometry.js?v=4';
-import { GRASS_MIN, GRASS_MAX } from './model.js?v=4';
+import * as G from './geometry.js?v=5';
+import { GRASS_MIN, GRASS_MAX } from './model.js?v=5';
 
 export const ACTIVITY_COLORS = {
   walking: '#2f74e0',
@@ -163,21 +163,21 @@ export function rampColor(ramp, lo, hi, v) {
   return new THREE.Color(ramp[i]).lerp(new THREE.Color(ramp[i + 1]), f - i);
 }
 
-// The path network colored per node: field = {nodes, edges, widths, values,
-// ramp, domain}. A node with a non-finite value hides its edges.
+// The network colored per node: field = {nodes, edges: [{a, b, width}],
+// values, ramp, domain}. A node with a non-finite value hides its edges.
 function fieldGeometry(field, y, s) {
   const pos = [];
   const col = [];
   const { nodes, edges, values, ramp, domain } = field;
   const colors = Array.from(values, (v) => (Number.isFinite(v) ? rampColor(ramp, domain[0], domain[1], v) : null));
-  for (let k = 0; k < edges.length; k++) {
-    const [i, j] = edges[k];
+  for (const edge of edges) {
+    const i = edge.a, j = edge.b;
     const ci = colors[i], cj = colors[j];
     if (!ci || !cj) continue;
     const a = nodes[i], b = nodes[j];
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     if (len < 1e-6) continue;
-    const hw = Math.max(field.widths[k] * 0.5, 1.1 * s);
+    const hw = Math.max(edge.width * 0.5, 1.1 * s);
     const nx = (-(b.y - a.y) / len) * hw, ny = ((b.x - a.x) / len) * hw;
     const quad = [[a, ci, 1], [b, cj, 1], [b, cj, -1], [a, ci, 1], [b, cj, -1], [a, ci, -1]];
     for (const [p, c, side] of quad) {
@@ -853,6 +853,7 @@ export class ParkView {
     this.distMats = {
       straight: flat(METRIC_COLORS.straight),
       foot: flat(METRIC_COLORS.foot),
+      footWalk: flat(METRIC_COLORS.foot, 0.45),
       paths: flat(METRIC_COLORS.paths, 0.85),
       gate: flat('#0b0b0b', 0.75),
       origin: flat('#0b0b0b', 0.9),
@@ -892,10 +893,16 @@ export class ParkView {
     if (dots.length) add(mergeGeometries(dots), this.distMats.gate, 21);
     dot.dispose();
 
+    // Routes are segments {kind: 'main' | 'walk', points}: 'walk' is the part
+    // on foot in a bike or car trip, drawn thinner and faded.
     for (const leg of d.legs) {
-      if (leg.paths?.length > 1) add(ribbon(leg.paths, 0.9, 2.4 * s), this.distMats.paths, 22);
+      for (const seg of leg.ref || []) if (seg.points.length > 1) add(ribbon(seg.points, 0.9, 2.4 * s), this.distMats.paths, 22);
       if (leg.line) add(dashedGeometry(leg.line[0], leg.line[1], 1.0, 2.2 * s, 12 * s, 8 * s), this.distMats.straight, 23);
-      if (leg.foot?.length > 1) add(ribbon(leg.foot, 1.1, 3.4 * s), this.distMats.foot, 24);
+      for (const seg of leg.route || []) {
+        if (seg.points.length < 2) continue;
+        if (seg.kind === 'walk') add(ribbon(seg.points, 1.05, 2.2 * s), this.distMats.footWalk, 24);
+        else add(ribbon(seg.points, 1.1, 3.4 * s), this.distMats.foot, 24);
+      }
     }
     const ring = new THREE.RingGeometry(3.5 * s, 5.2 * s, 28).rotateX(-Math.PI / 2);
     add(ring.translate(d.origin.x, 1.2, -d.origin.y), this.distMats.origin, 25);

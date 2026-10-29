@@ -22,8 +22,8 @@ The park is the real Central Park. `data/central-park.geojson` is a vendored ext
 | --- | --- |
 | `js/map.js` | Loads the GeoJSON extract and projects it to feet. |
 | `js/model.js` | The semantic model: entities, relationships, rules, actions. Has no rendering code. |
-| `js/distance.js` | The two distance metrics: the walking network, park gates, Dijkstra. Has no rendering code. |
-| `js/distance-ui.js` | The Distance panel: bars, scatter, near/far list, map overlay, Measure tool. |
+| `js/distance.js` | The two distance metrics for four travel modes: the path, lawn and street network, entrances per mode, Dijkstra. Has no rendering code. |
+| `js/distance-ui.js` | The Distance panel: mode picker, bars, every-mode comparison, scatter, near/far list, map overlay, Measure tool. |
 | `js/geometry.js` | Polygon helpers: area, containment, overlap, shared edges. |
 | `js/view.js` | three.js scene: lawns, paths, users, fences, labels, animation. |
 | `js/main.js` | Toolbar, selection, inspector, rule checklist, event log. |
@@ -53,40 +53,70 @@ The **Rules** panel checks every rule after each action. Actions enforce the rul
 
 Two forms of distance (metrics) between any two places in the park, and so, by where they stand, between any two occupants:
 
-- **Straight line**: Euclidean distance, as the crow flies. It ignores water, woods, fences and buildings.
-- **On foot**: the shortest walk along the real footpaths, cutting straight across any **open** lawn. Closed lawns are fenced, so the walk goes around them. This is a network distance computed with Dijkstra's algorithm, so it follows complex paths, not just a line of sight (the bonus).
-- **Paths only** is shown alongside as a reference: the same walk without lawn shortcuts. The gap between it and *on foot* is what the open lawns save.
+- **Straight line**: Euclidean distance, as the crow flies. It ignores water, woods, fences, buildings and traffic rules.
+- **By route**: the length (and time) of the fastest trip over the real network for the chosen travel mode. It is computed with Dijkstra's algorithm on travel time, so it follows complex paths, not just a line of sight (the bonus).
 
-The walking network is built once from the map. Every path vertex is a node, with extra nodes every 40 ft on long segments, about 14,000 nodes. Each lawn adds straight edges between the path points around its edge, about 5,800 edges in all, tagged with the lawn so they switch off when it closes. Where a path crosses the park outline there is an exit node. Exit nodes within 220 ft of each other are one **gate**, named after the cross street it lines up with (for example *CPW & W 81st St*), giving 48 gates. A query runs in a few milliseconds, so every number updates live as people walk, lawns close and time advances.
+### Travel modes and their entrances
 
-**Questions it answers.** Select a person, dog or bench, and the Distance panel shows:
+| Mode | Where it can go | Speed | Entrances |
+| --- | --- | --- | --- |
+| 🚶 Walk | Any footpath, straight across **open** lawns (closed lawns are fenced, so it goes around), and the sidewalks around the park | 3 mph | 48 gates where a footpath crosses the park outline |
+| 🏃 Run | Same network as walking | 6 mph | Same 48 gates |
+| 🚲 Bike | Rides only on the park drives, their approach roads, bike lanes and the streets. Anywhere else the rider walks the bike. No bikes on the lawns. | 10 mph riding, 3 mph walking the bike | 13 bike entrances where a rideable drive meets the street |
+| 🚗 Drive | Private cars are banned from the park drives, so cars cross the park only on the four sunken transverses (65th, 79th, 86th, 97th St) and use the streets around it. From inside the park you walk to the curb, get in, drive, park and walk on. | 15 mph, plus 1 min to get in and 1 min to get out | 8 car entrances at the ends of the transverses |
 
-- **Nearest exit**: the closest gate by straight line, and the closest gate on foot.
-- **Next open lawn**: the closest lawn by straight line (which may be closed), and the closest open lawn on foot.
+For walking and running, **paths only** (the same trip without lawn shortcuts) is shown as a reference, so you can see what the open lawns save.
+
+The network is built once from the map:
+
+- Every path vertex is a node, with extra nodes every 40 ft on long segments.
+- Each lawn adds straight edges between the path points around its edge, tagged with the lawn so they switch off when it closes.
+- The street and transverse lines are split where they cross and snapped together into a road network.
+- Each footpath gate is joined to the nearest sidewalk.
+
+That makes about 15,000 nodes. Every edge records who may use it: walkers, riders or cars. Gates are named after the cross street they line up with, for example *CPW & W 81st St*. A query for all four modes takes a few tens of milliseconds, so every number updates live as people walk, lawns close and time advances.
+
+### Using it
+
+Pick a mode at the top of the Distance panel, then select a person, dog or bench. The panel shows:
+
+- **Nearest exit / bike entrance / car entrance**: the closest one by straight line, and the quickest one by route.
+- **Next open lawn** (walking and running): the closest lawn by straight line (which may be closed), and the closest open lawn by route.
 - **A → B**: press **Measure** (`G`), then click a person or any spot. With nothing selected, Measure takes two clicks: A, then B.
+- **Every way**: the same question answered by all four modes, compared by time. Click a row to switch to that mode.
 
-**Visualization and comparison.**
+### Visualization and comparison
 
-- On the map, a blue dashed line is the straight line, an orange ribbon is the walking route, a green ribbon is the paths-only route, and black dots are gates.
-- In the panel, bars compare the three distances for each question, each with walking time at about 3 mph.
-- A scatter plots every gate and lawn by straight line (x) against on foot (y) on equal scales. The diagonal means "no detour". Points in the shaded wedge are at least 1.5× farther on foot. Click a point to measure to it.
-- A map overlay colors every path by on-foot distance from A, or by detour (on foot ÷ straight line).
+- On the map:
+  - A blue dashed line is the straight line.
+  - An orange ribbon is the route. In a bike or car trip, the walking parts are faded.
+  - A green ribbon is the paths-only reference.
+  - Dots mark the mode's entrances, with 🚲 or 🚗 icons.
+- In the panel:
+  - Bars compare the distances for each question, with travel times.
+  - A scatter plots every entrance and lawn by straight line (x) against route length (y), on equal scales. The diagonal means "no detour". Points in the shaded wedge are at least 1.5× farther by route. Click a point to measure to it.
+- A map overlay colors every path and street by travel time from A, or by detour (route ÷ straight line).
 
-**Near by one metric, far by the other.** The panel flags each case it finds:
+### Near by one metric, far by the other
 
-- The closest gate in a straight line isn't the closest on foot.
-- The closest lawn in a straight line is closed, so the walk goes on to another lawn.
-- A place's walk is at least 1.5× its straight line.
+The panel flags each case it finds:
+
+- The closest entrance in a straight line isn't the quickest by route.
+- The closest lawn in a straight line is closed.
+- A place's route is at least 1.5× its straight line.
 - A place's rank jumps between the two metrics, for example *4th closest in a straight line but 11th on foot*.
 
-The **Detour** overlay shows where this happens across the whole park: paths across the Reservoir, the Lake and the Ramble light up.
-
 Examples to try:
-- Select Visitor 7, sitting on the Great Lawn. Cedar Hill is the closest lawn in a straight line (852 ft), but it is closed, so the nearest open lawn on foot is Pilgrim Hill (2,608 ft). Close Pilgrim Hill too, and the walk moves on to East Green.
-- Measure across the Reservoir, from the west side of the running track to the east side. The straight line is 2,232 ft and the walk is 3,988 ft (1.8×).
+
+- **Closed lawn (walk).** Select Visitor 7, sitting on the Great Lawn. Cedar Hill is the closest lawn in a straight line (852 ft), but it is closed, so the nearest open lawn on foot is Pilgrim Hill (2,608 ft). Close Pilgrim Hill too, and the route moves on to East Green.
+- **Across the Reservoir (walk).** The straight line is 2,232 ft and the walk is 3,988 ft (1.8×). Turn on the Detour overlay to see the whole pattern.
+- **Across the park by car.** From CPW & W 72nd St to 5th Ave & E 72nd St, the straight line is 2,730 ft. By car it is 6,215 ft (2.3×), because cars must loop down to the 65th St transverse. Compared by time, walking takes 11 min, running 5.6 min, cycling 3.8 min (fastest, on the 72nd St drives) and driving 7.1 min.
+- **Walking the bike.** Visitor 7 walks the bike 809 ft to West Drive before riding out at W 85th St.
 
 ![Closed lawn: near in a straight line, far on foot](docs/distance-closed-lawn.png)
 ![Across the Reservoir, with the detour overlay](docs/distance-reservoir.png)
+![Across the park by car, compared with every mode](docs/distance-drive.png)
+![Walking the bike to the drive, then riding out](docs/distance-bike.png)
 
 ## Example scene
 
