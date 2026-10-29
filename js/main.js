@@ -1,10 +1,10 @@
 // Wires the park model, the three.js view and the toolbar together.
 
-import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=5';
-import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=5';
-import { loadMap } from './map.js?v=5';
-import { DistanceModel } from './distance.js?v=5';
-import { DistanceUI } from './distance-ui.js?v=5';
+import { Park, MOW_HEIGHT, NEEDS_MOWING_ABOVE, SQFT_PER_USER, LEASH_LENGTH } from './model.js?v=6';
+import { ParkView, ACTIVITY_COLORS, GRASS_SHORT, GRASS_TALL } from './view.js?v=6';
+import { loadMap } from './map.js?v=6';
+import { DistanceModel } from './distance.js?v=6';
+import { DistanceUI } from './distance-ui.js?v=6';
 
 const map = await loadMap();
 const park = new Park(map);

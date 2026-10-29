@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import * as G from './geometry.js?v=5';
-import { GRASS_MIN, GRASS_MAX } from './model.js?v=5';
+import * as G from './geometry.js?v=6';
+import { GRASS_MIN, GRASS_MAX } from './model.js?v=6';
 
 export const ACTIVITY_COLORS = {
   walking: '#2f74e0',
@@ -225,7 +225,7 @@ export class ParkView {
     this.clock = new THREE.Clock();
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
@@ -845,6 +845,9 @@ export class ParkView {
   buildDistanceLayer() {
     this.distGroup = new THREE.Group();
     this.scene.add(this.distGroup);
+    this.fieldMesh = null;
+    this.shownField = null;
+    this.distRebuildAt = 0;
     this.distShown = null;
     this.distScale = 1;
     const flat = (color, opacity = 0.95) => new THREE.MeshBasicMaterial({
@@ -875,6 +878,20 @@ export class ParkView {
       c.geometry?.dispose();
     }
     const d = this.distShown;
+    // The overlay is rebuilt only when its data changes, not on every zoom.
+    if (d?.field !== this.shownField) {
+      if (this.fieldMesh) {
+        this.scene.remove(this.fieldMesh);
+        this.fieldMesh.geometry.dispose();
+        this.fieldMesh = null;
+      }
+      this.shownField = d?.field || null;
+      if (this.shownField) {
+        this.fieldMesh = new THREE.Mesh(fieldGeometry(this.shownField, 0.6, Math.max(this.distScale, 4)), this.distMats.field);
+        this.fieldMesh.renderOrder = 20;
+        this.scene.add(this.fieldMesh);
+      }
+    }
     if (!d) return;
     const s = this.distScale;
     const add = (geometry, mat, order) => {
@@ -885,7 +902,6 @@ export class ParkView {
     };
     const ribbon = (points, y, w) => ribbonGeometry([{ points }], y, () => w).geometry;
 
-    if (d.field) add(fieldGeometry(d.field, 0.6, s), this.distMats.field, 20);
 
     // Every gate, as a dark dot where a path leaves the park.
     const dot = new THREE.CircleGeometry(2.6 * s, 20).rotateX(-Math.PI / 2);
@@ -997,9 +1013,14 @@ export class ParkView {
     const far = this.camera.position.distanceTo(target);
     this.container.classList.toggle('zoomed-out', far > 1200);
     // Distance routes stay a readable width on screen as you zoom.
+    // Rebuilt once the zoom settles, not on every frame of it.
     const scale = Math.max(1, Math.min(30, far / 300));
     if (Math.abs(scale / this.distScale - 1) > 0.3) {
       this.distScale = scale;
+      this.distRebuildAt = now + 150;
+    }
+    if (this.distRebuildAt && now > this.distRebuildAt) {
+      this.distRebuildAt = 0;
       if (this.distShown) this.renderDistance();
     }
     this.renderer.render(this.scene, this.camera);

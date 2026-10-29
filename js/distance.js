@@ -24,7 +24,7 @@
 // outline (walk, run), the subset of those where a rideable drive or bike lane
 // crosses it (bike), and the mouths of the transverse roads (drive).
 
-import * as G from './geometry.js?v=5';
+import * as G from './geometry.js?v=6';
 
 const STEP = 40;              // ft between nodes along a path
 const LAWN_EDGE_REACH = 16;   // a path node this close to a lawn can step onto it
@@ -369,6 +369,7 @@ export class DistanceModel {
   // Straight edges across each lawn between path points around its edge.
   buildLawnEdges() {
     this.lawnAccess = new Map();
+    this.lawnStep = new Map(); // lawn -> (access node -> ft from the node onto the lawn)
     let count = 0;
     for (const lawn of this.park.lawns) {
       const b = lawn.box;
@@ -379,6 +380,7 @@ export class DistanceModel {
         if (kept.every((m) => hyp(this.nodes[m], this.nodes[n]) >= LAWN_ACCESS_SPACING)) kept.push(n);
       }
       this.lawnAccess.set(lawn.id, kept);
+      this.lawnStep.set(lawn.id, new Map(kept.map((n) => [n, G.distanceToPolygon(this.nodes[n], lawn.boundary)])));
       for (let i = 0; i < kept.length; i++) {
         for (let j = i + 1; j < kept.length; j++) {
           const a = this.nodes[kept[i]], c = this.nodes[kept[j]];
@@ -408,6 +410,17 @@ export class DistanceModel {
   // A place is {point, loc: {type, id} | null}. Returns how it joins the
   // network: [{n, w, via}] where via is the drawn leg from the place to node n.
   attach(place, lawns) {
+    // The same place is attached once per lawn setting and reused by every
+    // mode (checking lawn crossings is the slow part).
+    place.attached ??= {};
+    const memo = place.attached[lawns ? 1 : 0];
+    if (memo) return memo;
+    const out = this.attachNow(place, lawns);
+    place.attached[lawns ? 1 : 0] = out;
+    return out;
+  }
+
+  attachNow(place, lawns) {
     const { park } = this;
     const { point, loc } = place;
     const out = [];
@@ -585,10 +598,17 @@ export class DistanceModel {
   // lawns (walking and running), an optional second place, and how all four
   // modes compare.
   analyze(origin, target, mode) {
-    const runs = {};
-    for (const m of Object.keys(MODES)) runs[m] = this.run(origin, m);
+    // Running uses exactly the walking network at twice the speed, so its
+    // runs are the walking runs with every time halved.
+    const asRun = (w) => ({ ...w, mode: 'run', time: w.time.map((t) => (t * WALK) / fps(6)), footSpeed: fps(6) });
+    const runs = { walk: this.run(origin, 'walk'), bike: this.run(origin, 'bike'), drive: this.run(origin, 'drive') };
+    runs.run = asRun(runs.walk);
     const r = runs[mode];
-    const ref = mode === 'walk' || mode === 'run' ? this.run(origin, mode, { lawns: false }) : null;
+    let ref = null;
+    if (mode === 'walk' || mode === 'run') {
+      ref = this.run(origin, 'walk', { lawns: false });
+      if (mode === 'run') ref = asRun(ref);
+    }
     const o = origin.point;
 
     // For a set of target nodes (+ a last step from each), the best arrival.
@@ -613,7 +633,8 @@ export class DistanceModel {
     if (mode === 'walk' || mode === 'run') {
       const ownLawn = origin.loc?.type === 'lawn' ? origin.loc.id : null;
       lawns = this.park.lawns.filter((l) => l.id !== ownLawn).map((l) => {
-        const step = (n) => G.distanceToPolygon(this.nodes[n], l.boundary);
+        const steps = this.lawnStep.get(l.id);
+        const step = (n) => steps.get(n);
         const acc = this.lawnAccess.get(l.id);
         const b = best(r, acc, step), p = best(ref, acc, step);
         return { kind: 'lawn', id: l.id, name: l.name, open: l.status === 'open', point: G.nearestOnBoundary(o, l.boundary).point, straight: G.distanceToPolygon(o, l.boundary), len: b.len, time: b.time, s: b.s, refLen: p.len };

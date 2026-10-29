@@ -3,9 +3,9 @@
 // (straight line vs route), as bars, as a comparison of all four modes, and as
 // a scatter of every entrance and lawn (straight line on x, route on y).
 
-import * as G from './geometry.js?v=5';
-import { DETOUR_FLAG, MODES } from './distance.js?v=5';
-import { METRIC_COLORS } from './view.js?v=5';
+import * as G from './geometry.js?v=6';
+import { DETOUR_FLAG, MODES } from './distance.js?v=6';
+import { METRIC_COLORS } from './view.js?v=6';
 
 const C = METRIC_COLORS;
 const TIME_RAMP = ['#fde3d4', '#f6b08f', '#eb6834', '#b8441a', '#7a2a0c'];
@@ -137,10 +137,16 @@ export class DistanceUI {
     const target = this.resolve(this.b);
     if (this.b && !target) this.b = null;
     if (this.active === 'target' && !target) this.active = 'gate';
-    this.result = origin ? this.model.analyze(origin, target, this.mode) : null;
+    // Recompute only when something the answer depends on has changed.
+    const key = origin && JSON.stringify([origin.point.x.toFixed(2), origin.point.y.toFixed(2), origin.loc,
+      target && [target.point.x.toFixed(2), target.point.y.toFixed(2), target.loc],
+      this.mode, this.park.lawns.map((l) => l.status[0]).join('')]);
+    if (!origin) this.result = null;
+    else if (key !== this.resultKey) this.result = this.model.analyze(origin, target, this.mode);
+    this.resultKey = key;
     if (this.result && this.active === 'lawn' && !this.result.lawn) this.active = 'gate';
-    this.renderPanel();
     this.renderView();
+    this.renderPanel();
     document.body.classList.toggle('measuring', !!this.picking);
     const btn = document.querySelector('[data-action="measure"]');
     if (btn) {
@@ -187,7 +193,9 @@ export class DistanceUI {
       for (const g of entrances) labels.push({ point: g.point, html: MODES[r.mode].icon, cls: 'entrance' });
     }
     let field = null;
-    if (this.overlay !== 'off') {
+    const fieldKey = `${this.resultKey}|${this.overlay}`;
+    if (this.overlay !== 'off' && fieldKey === this.fieldKey) field = this.field;
+    else if (this.overlay !== 'off') {
       const m = this.model;
       const o = r.origin.point;
       const at = m.nodes.map((p, i) => m.at(r.run, i));
@@ -204,8 +212,10 @@ export class DistanceUI {
         ramp = DETOUR_RAMP;
         domain = [1, DETOUR_MAX];
       }
-      field = { nodes: m.nodes, edges: m.drawEdges, values, ramp, domain };
+      field = { nodes: m.nodes, edges: m.drawEdges, values, ramp, domain, max: domain[1] };
     }
+    this.field = field;
+    this.fieldKey = fieldKey;
     this.view.showDistance({ origin: r.origin.point, gates: entrances, legs, labels, field });
   }
 
@@ -451,8 +461,7 @@ export class DistanceUI {
     const opt = (k, text) => `<button class="seg ${this.overlay === k ? 'on' : ''}" data-dist="overlay:${k}">${text}</button>`;
     let legend = '';
     if (this.overlay === 'time') {
-      const m = this.model;
-      const max = this.timeMax(m.nodes.map((p, i) => m.at(r.run, i).time / 60));
+      const max = this.field?.max ?? 0;
       legend = `<div class="ramp" style="background:linear-gradient(90deg,${TIME_RAMP.join(',')})"></div>
         <div class="ramp-ticks"><span>0 min</span><span>${max / 2} min</span><span>${max}+ min</span></div>
         <p class="hint">Every path and street colored by travel time from A, ${MODES[r.mode].verb}.</p>`;
